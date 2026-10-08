@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>轻盈计划</title>
+  <meta name="description" content="中式家常减脂餐 + 居家运动 + 体重记录">
+  <meta name="theme-color" content="#2fa866" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#14231a" media="(prefers-color-scheme: dark)">
+  <meta name="color-scheme" content="light dark">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="轻盈计划">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="application-name" content="轻盈计划">
+  <meta name="format-detection" content="telephone=no">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" sizes="48x48" href="icons/favicon-48.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon-192.png" alt="" width="28" height="28">
+      <span>轻盈计划</span>
+    </div>
+    <button id="installBtn" class="install-btn" hidden>📲 添加到桌面</button>
+  </header>
+
+  <main id="app">
+    <div id="banners" class="page" aria-live="polite"></div>
+    <section id="page-today" class="page" data-page="today"></section>
+    <section id="page-log" class="page" data-page="log" hidden></section>
+    <section id="page-records" class="page" data-page="records" hidden></section>
+    <section id="page-plan" class="page" data-page="plan" hidden></section>
+  </main>
+
+  <nav class="tabbar" aria-label="主导航">
+    <button class="tab active" data-go="today"><span class="tab-ico">🏠</span><span>今日</span></button>
+    <button class="tab" data-go="log"><span class="tab-ico">🍽️</span><span>记餐</span></button>
+    <button class="tab" data-go="records"><span class="tab-ico">📈</span><span>记录</span></button>
+    <button class="tab" data-go="plan"><span class="tab-ico">📋</span><span>计划</span></button>
+  </nav>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-mask" data-close></div>
+    <div class="modal-panel" role="dialog" aria-modal="true"></div>
+  </div>
+  <div id="fabBar" class="fab-bar" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
