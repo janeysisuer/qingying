@@ -91,10 +91,11 @@ function openModal(html) {
   const m = $('#modal');
   $('.modal-panel', m).innerHTML = html;
   m.hidden = false;
+  document.body.classList.add('modal-open');
   const first = $('input', m);
   if (first && first.type !== 'checkbox') setTimeout(() => first.focus(), 60);
 }
-function closeModal() { $('#modal').hidden = true; }
+function closeModal() { $('#modal').hidden = true; document.body.classList.remove('modal-open'); }
 
 let currentPage = 'today';
 function go(page) {
@@ -272,7 +273,7 @@ function addPlanMeal(slot, k = dateKey()) {
   const p = MEAL_PLAN[wd][slot];
   const day = getDay(k, true);
   if (day.meals[slot].some((it) => it.plan)) { toast('这一餐已经记过啦'); return; }
-  day.meals[slot].push({ id: uid(), name: p.text, portion: '计划餐一份', kcal: p.kcal, protein: p.protein, plan: true });
+  day.meals[slot].push({ id: uid(), name: p.text, portion: '按计划', kcal: p.kcal, protein: p.protein, plan: true });
   save();
   toast(`已记入${slotName(slot)}：约${p.kcal}千卡`);
 }
@@ -325,7 +326,7 @@ function renderLog() {
     </div>
     <div class="card">
       <h3>🎤 说一句话记餐</h3>
-      <textarea class="input" id="sayText" style="min-height:64px;font-size:15px" placeholder="例如：中午吃了一碗米饭、半盘西兰花、二两鸡胸肉，还有两个鸡蛋"></textarea>
+      <textarea class="input" id="sayText" style="min-height:64px;font-size:15px" placeholder="例如：中午吃了米饭100克、西兰花200克、二两鸡胸肉，还有两个鸡蛋"></textarea>
       <div class="row" style="margin-top:8px">
         <button class="btn ghost grow" id="voiceBtn" data-action="voice">🎤 按我说话</button>
         <button class="btn grow" data-action="sayParse">🔍 认出食物</button>
@@ -348,10 +349,13 @@ function renderLog() {
           <input class="input" id="mName" placeholder="如：西红柿鸡蛋面" maxlength="30">
         </label>
         <label class="field">吃了多少
-          <input class="input" id="mPortion" placeholder="如：一碗、半盘、二两" maxlength="12" value="一份">
+          <span class="row">
+            <input class="input grow" id="mAmount" type="number" inputmode="decimal" min="1" max="3000" step="any" placeholder="如：150">
+            <select class="input" id="mUnit" style="width:auto"><option value="g">克</option><option value="liang">两</option></select>
+          </span>
         </label>
         <div class="chips">
-          ${['一碗', '半碗', '一盘', '半盘', '一两', '二两', '一个', '半个', '一份'].map((p) => `<button class="chip" data-action="mPortion" data-p="${p}">${p}</button>`).join('')}
+          ${[[50, 'g'], [100, 'g'], [150, 'g'], [200, 'g'], [1, 'liang'], [2, 'liang'], [3, 'liang']].map(([n, u]) => `<button class="chip" data-action="mAmount" data-n="${n}" data-u="${u}">${n}${u === 'g' ? '克' : '两'}</button>`).join('')}
         </div>
         <label class="field">它更像哪一类？（帮助估算）
           <select class="input" id="mCat">
@@ -391,12 +395,23 @@ function renderFoodArea() {
 function pickFood(cat, i) {
   const f = FOODS[cat][i];
   openModal(`
-    <h3>${f.icon} ${esc(f.name)} · 吃了多少？</h3>
+    <h3>${f.icon} ${esc(f.name)} · 吃了多少克？</h3>
+    ${f.hint ? `<p class="muted small" style="margin:-6px 0 10px">💡 ${esc(f.hint)}</p>` : ''}
     <div class="unit-grid">
-      ${f.units.map((u, j) => `<button data-action="pickUnit" data-cat="${cat}" data-i="${i}" data-j="${j}">${esc(u[0])}</button>`).join('')}
+      ${chipsFor(f).map((g) => `<button data-action="pickGrams" data-cat="${cat}" data-i="${i}" data-g="${g}">${g}克${!f.liquid && g >= 25 ? `<small>${round1(g / GRAMS_PER_LIANG)}两</small>` : ''}</button>`).join('')}
     </div>
-    <p class="muted small" style="margin-top:12px">点一下就加入；吃了两份就点两次。</p>
-    <button class="btn line block" data-close style="margin-top:6px">完成</button>`);
+    <div class="row" style="margin-top:12px">
+      <input class="input grow" id="gInput" type="number" inputmode="decimal" min="1" max="3000" step="any" placeholder="自己填数" data-input="gramsPreview" data-cat="${cat}" data-i="${i}">
+      <select class="input" id="gUnit" style="width:auto" data-input="gramsPreview" data-cat="${cat}" data-i="${i}"><option value="g">克</option>${f.liquid ? '' : '<option value="liang">两</option>'}</select>
+      <button class="btn" data-action="pickCustom" data-cat="${cat}" data-i="${i}">加入</button>
+    </div>
+    <p class="muted small" id="gPreview" style="margin:8px 0 0">每100克约 ${f.k} 千卡。点一下就加入，可以连点。</p>
+    <button class="btn line block" data-close style="margin-top:10px">完成</button>`);
+}
+function readGramsInput() {
+  const v = parseFloat($('#gInput').value);
+  if (!(v > 0)) return 0;
+  return Math.round($('#gUnit').value === 'liang' ? v * GRAMS_PER_LIANG : v);
 }
 
 function renderBasket() {
@@ -443,55 +458,65 @@ function itemRow(it, k, slot) {
     <button class="icon-btn" data-action="delItem" data-k="${k}" data-slot="${slot}" data-id="${esc(it.id)}" aria-label="删除">🗑️</button></li>`;
 }
 
-/* 手动输入：解析中文分量，估算热量 */
+/* ---------- 克 / 两 换算 ---------- */
 const CN_NUM = { 半: 0.5, 一: 1, 二: 2, 两: 2, 俩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
-const UNIT_FACTOR = { 斤: 5, 两: 0.5, 碗: 1, 盘: 1, 份: 1, 个: 1, 根: 1, 杯: 1, 盒: 1, 块: 0.6, 片: 0.4, 勺: 0.4, 把: 0.6, 只: 0.5, 串: 0.8, 瓶: 1.2, 罐: 1, 条: 1, 张: 0.8, 口: 0.15, 点: 0.3 };
-function parsePortion(text) {
-  const t = String(text || '').replace(/\s/g, '');
-  let count = 1;
-  const m = t.match(/(\d+(?:\.\d+)?)/);
-  if (m) count = parseFloat(m[1]);
-  else {
-    const c = t.match(/[半一二两俩三四五六七八九十]/);
-    if (c) count = CN_NUM[c[0]];
-  }
-  if (/小半/.test(t)) count = 0.35;
-  // “两”既可作数字也可作单位：如“二两”“三两”中最后一个“两”是单位
-  let unit = '';
-  const u = t.match(/([斤碗盘份个根杯盒块片勺把只串瓶罐条张口点])/);
-  if (/[一二两三四五六七八九十半\d]两$/.test(t) || t === '两') unit = '两';
-  else if (u) unit = u[1];
-  if (unit === '两' && /^两两?$/.test(t)) count = 1;
-  let factor = count * (UNIT_FACTOR[unit] != null ? UNIT_FACTOR[unit] : 1);
-  if (/大/.test(t)) factor *= 1.5; else if (/小(?!半)/.test(t)) factor *= 0.7;
-  return { count, unit, factor: Math.min(8, Math.max(0.1, factor)) };
+function cnNumber(str) {
+  if (/^\d+(\.\d+)?$/.test(str)) return parseFloat(str);
+  if (str === '半') return 0.5;
+  // 支持“一”到“九十九”以及“两”“俩”“几”，如“十二”“二十”“一百五”
+  str = str.replace(/几/g, '三');
+  const m = str.match(/^([一二两俩三四五六七八九])?百([一二两三四五六七八九])?(十)?([一二三四五六七八九])?$/);
+  if (m) return (CN_NUM[m[1]] || 1) * 100 + (m[2] ? CN_NUM[m[2]] * 10 : 0) + (m[4] ? CN_NUM[m[4]] : 0);
+  const t = str.match(/^([一二三四五六七八九])?十([一二三四五六七八九])?$/);
+  if (t) return (t[1] ? CN_NUM[t[1]] : 1) * 10 + (t[2] ? CN_NUM[t[2]] : 0);
+  let n = 0;
+  for (const ch of str) { if (CN_NUM[ch] == null) return null; n = n * 10 + CN_NUM[ch]; }
+  return str.length === 1 ? CN_NUM[str] : n;
 }
+/* 把“150克”“三两”“半斤”“2个”换算成克；说不出具体重量时返回 null */
+function parseGrams(text, food) {
+  const t = String(text || '').replace(/\s/g, '').replace(/公斤/g, '千克');
+  const m = t.match(/(\d+(?:\.\d+)?|[半一二两俩三四五六七八九十百几]+)(千克|克|g|G|毫升|ml|ML|两|斤|个|只|根|片|颗|粒|盒|杯|罐|瓶|条)/);
+  if (!m) return null;
+  let num = cnNumber(m[1]);
+  const unit = m[2];
+  if (num == null) return null;
+  if (t[m.index + m[0].length] === '半') num += 0.5; // “一斤半”“二两半”
+  let grams;
+  if (unit === '千克') grams = num * 1000;
+  else if (/^(克|g|G|毫升|ml|ML)$/.test(unit)) grams = num;
+  else if (unit === '两') grams = num * GRAMS_PER_LIANG;
+  else if (unit === '斤') grams = num * 500;
+  else if (food && food.each) grams = num * food.each;
+  else return null;
+  return { grams: Math.round(grams), count: unit === '两' || unit === '斤' || grams === num ? 0 : num };
+}
+function gramsLabel(g, f) {
+  const liang = round1(g / GRAMS_PER_LIANG);
+  if (f && f.liquid) return `${g}克`;
+  return g >= 25 ? `${g}克（${liang}两）` : `${g}克`;
+}
+function calcFood(f, grams) { return { kcal: Math.round((f.k * grams) / 100), protein: round1((f.p * grams) / 100) }; }
+function defaultGrams(f) { return f.each && f.each >= 50 ? f.each : f.liquid ? 250 : f.small ? 15 : 100; }
+function chipsFor(f) { return GRAM_CHIPS[f.liquid ? 'liquid' : f.small ? 'small' : 'normal']; }
 function findFood(name) {
   for (const c of FOOD_CATEGORIES) { const f = FOODS[c.key].find((x) => x.name === name); if (f) return f; }
   return null;
 }
-/* 按食物库里同单位的分量换算；换算不了返回 null */
-function portionOfFood(f, portion) {
-  const p = parsePortion(portion);
-  if (!p.unit) return null;
-  const unit = f.units.find((u) => u[0] === '一' + p.unit) || f.units.find((u) => u[0].endsWith(p.unit) && !/[大小半]/.test(u[0]));
-  if (!unit) return null;
-  let mult = p.unit === '两' ? p.count / (CN_NUM[unit[0][0]] || 1) : p.count;
-  if (/大/.test(portion)) mult *= 1.5; else if (/小(?!半)/.test(portion)) mult *= 0.7;
-  return { kcal: Math.round(unit[1] * mult), protein: round1(unit[2] * mult) };
+function foodItem(f, grams, count) {
+  const c = calcFood(f, grams);
+  return { name: f.name, portion: gramsLabel(grams, f) + (count && !f.liquid ? ` · ${count === 0.5 ? '半' : count}个` : ''), grams, kcal: c.kcal, protein: c.protein };
 }
-function estimateManual(name, portion, cat) {
-  // 先在食物库里找同名食物，按相同单位换算
+function estimateManual(name, grams, cat) {
+  // 先在食物库里找同名食物，用它的每100克数据
   let best = null;
   FOOD_CATEGORIES.forEach((c) => FOODS[c.key].forEach((f) => {
     const n = f.name.replace(/\(.*?\)/g, '');
     if (name.includes(n) || n.includes(name)) if (!best || n.length > best.n.length) best = { f, n };
   }));
-  const hit = best && portionOfFood(best.f, portion);
-  if (hit) return hit;
-  const p = parsePortion(portion);
+  if (best) return calcFood(best.f, grams);
   const base = MANUAL_BASE[cat] || MANUAL_BASE.other;
-  return { kcal: Math.round(base[0] * p.factor), protein: round1(base[1] * p.factor) };
+  return { kcal: Math.round((base[0] * grams) / 100), protein: round1((base[1] * grams) / 100) };
 }
 
 /* 说一句话记餐：从“中午吃了一碗米饭、两个鸡蛋”里认出食物和分量 */
@@ -502,10 +527,9 @@ const ALIAS_LIST = (() => {
   }));
   return Object.keys(map).sort((a, b) => b.length - a.length).map((k) => [k, map[k]]);
 })();
-const QTY_RE = /(?:\d+(?:\.\d+)?|小半|[半一二两俩三四五六七八九十几]+)\s*(?:大|小)?\s*(?:碗|盘|碟|个|根|杯|片|块|两|斤|只|盒|勺|把|份|串|瓣|颗|粒|条|罐|瓶|口|点)/g;
+const QTY_RE = /(?:\d+(?:\.\d+)?|小半|[半一二两俩三四五六七八九十百几]+)\s*(?:大|小)?\s*(?:千克|公斤|克|g|G|毫升|ml|两|斤|碗|盘|碟|个|根|杯|片|块|只|盒|勺|把|份|串|瓣|颗|粒|条|罐|瓶|口|点)半?/g;
 function lastQty(text) { const m = text.match(QTY_RE); return m ? m[m.length - 1] : ''; }
 function firstQty(text) { const m = text.match(QTY_RE); return m ? m[0] : ''; }
-function normQty(q) { return q.replace(/\s/g, '').replace(/[颗粒]/g, '个').replace(/碟/g, '盘').replace(/几/g, '三'); }
 // 单字叫法（饭、面、蛋、鱼…）要前后是分量或分隔才算，免得“烤冷面”被认成面条
 function singleOk(t, i) {
   const prev = t[i - 1], next = t[i + 1];
@@ -542,18 +566,22 @@ function parseSpeech(text) {
     // 中文习惯“一碗米饭”（分量在前），也兼容“米饭一碗”
     let q = lastQty(before.split(/[，,。；;、]/).pop());
     if (!q) q = firstQty(after.split(/[，,。；;、]/)[0]);
-    q = normQty(q);
     const f = findFood(h.name);
     if (!f) return;
-    const def = f.units.find((u) => u[0].startsWith('一') && !/大/.test(u[0])) || f.units[0];
-    const hit = q && portionOfFood(f, q);
-    items.push(hit ? { name: f.name, portion: q, kcal: hit.kcal, protein: hit.protein } : { name: f.name, portion: def[0], kcal: def[1], protein: def[2] });
+    const g = parseGrams(q, f);
+    if (g) items.push(foodItem(f, g.grams, g.count));
+    else {
+      // 没说克数（或说的是“一碗”这类模糊量），先按常见重量估算，请用户核对
+      const it = foodItem(f, defaultGrams(f));
+      it.guess = true;
+      items.push(it);
+    }
   });
   // 没认出的部分
   let rest = '';
   for (let i = 0; i < t.length; i++) rest += taken[i] ? '，' : t[i];
   const unknown = rest.split(/[，,。；;、和跟与及还有再加另外然后]+/)
-    .map((s) => s.replace(QTY_RE, '').replace(/早上|早晨|早饭|早餐|早点|上午|下午|中午|午饭|午餐|中饭|晚上|晚饭|晚餐|加餐|今天|我|吃了|喝了|吃|喝|了|的|一些|一点|大概|左右|还|有|就|是|和|跟|又|也|点/g, '').replace(/[\d半一二两俩三四五六七八九十几大小个碗盘杯块根片只份]+$/g, ''))
+    .map((s) => s.replace(QTY_RE, '').replace(/早上|早晨|早饭|早餐|早点|上午|下午|中午|午饭|午餐|中饭|晚上|晚饭|晚餐|加餐|今天|我|吃了|喝了|吃|喝|了|的|一些|一点|大概|左右|还|有|就|是|和|跟|又|也|点/g, '').replace(/[\d半一二两俩三四五六七八九十百几大小个碗盘杯块根片只份克斤g]+$/g, ''))
     .filter((s) => s.length >= 2);
   return { slot, items, unknown };
 }
@@ -566,7 +594,7 @@ function startVoice() {
     openModal(`<h3>🎤 用输入法说话</h3>
       <div class="note">这个浏览器不支持网页直接录音，但可以用手机输入法的语音功能：
         <ol><li>点一下上面的文字框，弹出键盘</li><li>点键盘上的 <b>🎤 话筒</b> 图标（华为/小艺输入法在键盘左下角或上方工具栏，也可以长按空格键）</li>
-        <li>说“中午吃了一碗米饭、半盘西兰花、二两鸡胸肉”</li><li>说完点 <b>“认出食物”</b></li></ol></div>
+        <li>说“中午吃了米饭100克、西兰花200克、二两鸡胸肉”</li><li>说完点 <b>“认出食物”</b></li></ol></div>
       <button class="btn block" data-close style="margin-top:12px">知道了</button>`);
   };
   if (!SR) { keyboardTip(); return; }
@@ -792,7 +820,7 @@ function renderPlan() {
       <h2>🗑️ 清空数据</h2>
       <p class="muted small" style="margin-top:-4px">会删除所有饮食、运动、体重记录，无法撤销。建议先导出备份。</p>
       <button class="btn danger block" data-action="clearData">清空所有数据</button>
-      <p class="muted small" style="text-align:center;margin:12px 0 0">轻盈计划 v1.1 · 热量数据为估算值，仅供参考</p>
+      <p class="muted small" style="text-align:center;margin:12px 0 0">轻盈计划 v1.2 · 热量数据为估算值，仅供参考</p>
     </div>`;
   }
   $('#page-plan').innerHTML = `
@@ -850,6 +878,13 @@ function copyText(text) {
   });
 }
 
+function addGrams(f, g) {
+  const it = foodItem(f, g);
+  logState.basket.push(it);
+  toast(`已加入：${f.name} ${it.portion}，约${it.kcal}千卡`);
+  renderBasket(); renderFab();
+}
+
 /* ---------- 点击事件 ---------- */
 const ACTIONS = {
   goLog(el) { logState.slot = el.dataset.slot || defaultSlot(); logState.date = dateKey(); go('log'); },
@@ -881,12 +916,12 @@ const ACTIONS = {
   logSlot(el) { logState.slot = el.dataset.slot; renderLog(); renderFab(); },
   logCat(el) { logState.cat = el.dataset.cat; logState.search = ''; const s = $('[data-input="foodSearch"]'); if (s) s.value = ''; document.querySelectorAll('.cat-tabs button').forEach((b) => b.classList.toggle('on', b.dataset.cat === logState.cat)); renderFoodArea(); },
   pickFood(el) { pickFood(el.dataset.cat, +el.dataset.i); },
-  pickUnit(el) {
-    const f = FOODS[el.dataset.cat][+el.dataset.i];
-    const u = f.units[+el.dataset.j];
-    logState.basket.push({ name: f.name, portion: u[0], kcal: u[1], protein: u[2] });
-    toast(`已加入：${f.name} ${u[0]}`);
-    renderBasket(); renderFab();
+  pickGrams(el) { addGrams(FOODS[el.dataset.cat][+el.dataset.i], +el.dataset.g); },
+  pickCustom(el) {
+    const g = readGramsInput();
+    if (!g || g > 3000) { toast('请填写吃了多少克（或两）'); $('#gInput').focus(); return; }
+    addGrams(FOODS[el.dataset.cat][+el.dataset.i], g);
+    $('#gInput').value = '';
   },
   basketDel(el) { logState.basket.splice(+el.dataset.idx, 1); renderBasket(); renderFab(); },
   voice() { startVoice(); },
@@ -902,20 +937,24 @@ const ACTIONS = {
     }
     r.items.forEach((it) => logState.basket.push(it));
     $('#sayResult').innerHTML = `<div class="note" style="margin-top:8px">
-      ${r.items.length ? `✅ 认出 ${r.items.length} 样，已放进“待记入”${r.slot ? `（${slotName(r.slot)}）` : ''}：<br>${r.items.map((it) => `${esc(it.name)} ${esc(it.portion)}`).join('、')}<br>请核对，不对的点 ✕ 删掉。` : '😅 没认出食物。'}
+      ${r.items.length ? `✅ 认出 ${r.items.length} 样，已放进“待记入”${r.slot ? `（${slotName(r.slot)}）` : ''}：<br>${r.items.map((it) => `${esc(it.name)} ${esc(it.portion)}${it.guess ? '<b style="color:var(--warn)">（没说克数，按此估算）</b>' : ''}`).join('、')}<br>请核对，不对的点 ✕ 删掉重选。` : '😅 没认出食物。'}
       ${r.unknown.length ? `<br>❓ 没认出：${r.unknown.map(esc).join('、')}，可以用下方“手动输入”补上。` : ''}</div>`;
     if (r.items.length) box.value = '';
     renderBasket(); renderFab();
   },
-  mPortion(el) { $('#mPortion').value = el.dataset.p; },
+  mAmount(el) { $('#mAmount').value = el.dataset.n; $('#mUnit').value = el.dataset.u; },
   manualAdd() {
     const name = $('#mName').value.trim();
-    const portion = $('#mPortion').value.trim() || '一份';
     if (!name) { toast('请先写上吃了什么'); $('#mName').focus(); return; }
-    const est = estimateManual(name, portion, $('#mCat').value);
-    logState.basket.push({ name, portion, kcal: est.kcal, protein: est.protein, manual: true });
-    $('#mName').value = ''; $('#mPortion').value = '一份';
-    toast(`已加入：${name} ${portion}`);
+    const v = parseFloat($('#mAmount').value);
+    if (!(v > 0)) { toast('请填写吃了多少克（或两）'); $('#mAmount').focus(); return; }
+    const grams = Math.round($('#mUnit').value === 'liang' ? v * GRAMS_PER_LIANG : v);
+    if (grams > 3000) { toast('分量太大了，请检查一下'); return; }
+    const est = estimateManual(name, grams, $('#mCat').value);
+    const portion = gramsLabel(grams);
+    logState.basket.push({ name, portion, grams, kcal: est.kcal, protein: est.protein, manual: true });
+    $('#mName').value = ''; $('#mAmount').value = '';
+    toast(`已加入：${name} ${portion}，约${est.kcal}千卡`);
     renderBasket(); renderFab();
   },
   commitBasket() {
@@ -988,6 +1027,12 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('input', (e) => {
   const el = e.target;
+  if (el.dataset.input === 'gramsPreview') {
+    const f = FOODS[el.dataset.cat][+el.dataset.i];
+    const g = readGramsInput();
+    $('#gPreview').textContent = g ? `${gramsLabel(g, f)} 约 ${calcFood(f, g).kcal} 千卡` : `每100克约 ${f.k} 千卡。`;
+    return;
+  }
   if (el.dataset.input === 'foodSearch') {
     logState.search = el.value;
     document.querySelectorAll('.cat-tabs button').forEach((b) => b.classList.toggle('on', !el.value.trim() && b.dataset.cat === logState.cat));
@@ -1029,6 +1074,7 @@ document.addEventListener('change', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') closeModal();
   if (e.key === 'Enter' && e.target.id === 'wInput') ACTIONS.saveWeightModal();
+  if (e.key === 'Enter' && e.target.id === 'gInput') { const b = $('[data-action="pickCustom"]'); if (b) ACTIONS.pickCustom(b); }
 });
 
 /* ---------- 安装到桌面 ---------- */

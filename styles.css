@@ -362,3 +362,5 @@ body.has-fab main { padding-bottom: 72px; }
 .switch { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 14px; }
 .switch input { width: 22px; height: 22px; accent-color: var(--primary); flex: none; }
 body.has-fab .toast { bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 90px); }
+.unit-grid button small { display: block; font-size: 12px; font-weight: 400; color: var(--text-2); }
+body.modal-open .toast { top: calc(env(safe-area-inset-top) + 16px); bottom: auto; }
