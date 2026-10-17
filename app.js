@@ -323,6 +323,15 @@ function renderLog() {
         ${MEAL_SLOTS.map((s) => `<button data-action="logSlot" data-slot="${s.key}" class="${L.slot === s.key ? 'on' : ''}">${s.name}</button>`).join('')}
       </div>
     </div>
+    <div class="card">
+      <h3>🎤 说一句话记餐</h3>
+      <textarea class="input" id="sayText" style="min-height:64px;font-size:15px" placeholder="例如：中午吃了一碗米饭、半盘西兰花、二两鸡胸肉，还有两个鸡蛋"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn ghost grow" id="voiceBtn" data-action="voice">🎤 按我说话</button>
+        <button class="btn grow" data-action="sayParse">🔍 认出食物</button>
+      </div>
+      <div id="sayResult"></div>
+    </div>
     <div id="basketArea"></div>
     <div class="card">
       <h3>① 选食物 → ② 点分量</h3>
@@ -457,24 +466,135 @@ function parsePortion(text) {
   if (/大/.test(t)) factor *= 1.5; else if (/小(?!半)/.test(t)) factor *= 0.7;
   return { count, unit, factor: Math.min(8, Math.max(0.1, factor)) };
 }
-function estimateManual(name, portion, cat) {
+function findFood(name) {
+  for (const c of FOOD_CATEGORIES) { const f = FOODS[c.key].find((x) => x.name === name); if (f) return f; }
+  return null;
+}
+/* 按食物库里同单位的分量换算；换算不了返回 null */
+function portionOfFood(f, portion) {
   const p = parsePortion(portion);
+  if (!p.unit) return null;
+  const unit = f.units.find((u) => u[0] === '一' + p.unit) || f.units.find((u) => u[0].endsWith(p.unit) && !/[大小半]/.test(u[0]));
+  if (!unit) return null;
+  let mult = p.unit === '两' ? p.count / (CN_NUM[unit[0][0]] || 1) : p.count;
+  if (/大/.test(portion)) mult *= 1.5; else if (/小(?!半)/.test(portion)) mult *= 0.7;
+  return { kcal: Math.round(unit[1] * mult), protein: round1(unit[2] * mult) };
+}
+function estimateManual(name, portion, cat) {
   // 先在食物库里找同名食物，按相同单位换算
   let best = null;
   FOOD_CATEGORIES.forEach((c) => FOODS[c.key].forEach((f) => {
     const n = f.name.replace(/\(.*?\)/g, '');
     if (name.includes(n) || n.includes(name)) if (!best || n.length > best.n.length) best = { f, n };
   }));
-  if (best && p.unit) {
-    const unit = best.f.units.find((u) => u[0] === '一' + p.unit) || best.f.units.find((u) => u[0].endsWith(p.unit) && !/[大小半]/.test(u[0]));
-    if (unit) {
-      let mult = p.unit === '两' ? p.count / (CN_NUM[unit[0][0]] || 1) : p.count;
-      if (/大/.test(portion)) mult *= 1.5; else if (/小(?!半)/.test(portion)) mult *= 0.7;
-      return { kcal: Math.round(unit[1] * mult), protein: round1(unit[2] * mult) };
-    }
-  }
+  const hit = best && portionOfFood(best.f, portion);
+  if (hit) return hit;
+  const p = parsePortion(portion);
   const base = MANUAL_BASE[cat] || MANUAL_BASE.other;
   return { kcal: Math.round(base[0] * p.factor), protein: round1(base[1] * p.factor) };
+}
+
+/* 说一句话记餐：从“中午吃了一碗米饭、两个鸡蛋”里认出食物和分量 */
+const ALIAS_LIST = (() => {
+  const map = Object.assign({}, FOOD_ALIASES);
+  FOOD_CATEGORIES.forEach((c) => FOODS[c.key].forEach((f) => {
+    f.name.replace(/\(.*?\)/g, '').split('/').forEach((n) => { if (n && !map[n]) map[n] = f.name; });
+  }));
+  return Object.keys(map).sort((a, b) => b.length - a.length).map((k) => [k, map[k]]);
+})();
+const QTY_RE = /(?:\d+(?:\.\d+)?|小半|[半一二两俩三四五六七八九十几]+)\s*(?:大|小)?\s*(?:碗|盘|碟|个|根|杯|片|块|两|斤|只|盒|勺|把|份|串|瓣|颗|粒|条|罐|瓶|口|点)/g;
+function lastQty(text) { const m = text.match(QTY_RE); return m ? m[m.length - 1] : ''; }
+function firstQty(text) { const m = text.match(QTY_RE); return m ? m[0] : ''; }
+function normQty(q) { return q.replace(/\s/g, '').replace(/[颗粒]/g, '个').replace(/碟/g, '盘').replace(/几/g, '三'); }
+// 单字叫法（饭、面、蛋、鱼…）要前后是分量或分隔才算，免得“烤冷面”被认成面条
+function singleOk(t, i) {
+  const prev = t[i - 1], next = t[i + 1];
+  const prevOk = !prev || /[^\u4e00-\u9fa5]|[碗盘碟个根杯片块两斤只盒勺把份串瓣颗粒条罐瓶口了吃喝和跟及点些]/.test(prev);
+  const nextOk = !next || /[^\u4e00-\u9fa5]|[一二两俩三四五六七八九十半几和跟还再也又]/.test(next);
+  return prevOk && nextOk;
+}
+function parseSpeech(text) {
+  const raw = String(text || '').replace(/\s+/g, '');
+  let slot = null;
+  const t0 = raw;
+  if (/早上|早晨|早饭|早餐|早点/.test(t0)) slot = 'breakfast';
+  else if (/中午|午饭|午餐|中饭/.test(t0)) slot = 'lunch';
+  else if (/晚上|晚饭|晚餐|夜里/.test(t0)) slot = 'dinner';
+  else if (/加餐|下午茶|零食|夜宵/.test(t0)) slot = 'snack';
+  // 把“午饭”“吃饭”这类词抹掉，免得把“饭”当成米饭
+  const t = t0.replace(/早饭|午饭|晚饭|中饭|吃饭|做饭|饭后|饭前|早点|早餐|午餐|晚餐/g, (m) => '，'.repeat(m.length));
+  // 找出所有食物名（长的优先、不重叠）
+  const taken = new Array(t.length).fill(false);
+  const hits = [];
+  ALIAS_LIST.forEach(([alias, name]) => {
+    let from = 0, i;
+    while ((i = t.indexOf(alias, from)) !== -1) {
+      const end = i + alias.length;
+      if (!taken.slice(i, end).some(Boolean) && (alias.length > 1 || singleOk(t, i))) { for (let j = i; j < end; j++) taken[j] = true; hits.push({ start: i, end, name }); }
+      from = end;
+    }
+  });
+  hits.sort((a, b) => a.start - b.start);
+  const items = [];
+  hits.forEach((h, idx) => {
+    const before = t.slice(idx ? hits[idx - 1].end : 0, h.start);
+    const after = t.slice(h.end, idx < hits.length - 1 ? hits[idx + 1].start : t.length);
+    // 中文习惯“一碗米饭”（分量在前），也兼容“米饭一碗”
+    let q = lastQty(before.split(/[，,。；;、]/).pop());
+    if (!q) q = firstQty(after.split(/[，,。；;、]/)[0]);
+    q = normQty(q);
+    const f = findFood(h.name);
+    if (!f) return;
+    const def = f.units.find((u) => u[0].startsWith('一') && !/大/.test(u[0])) || f.units[0];
+    const hit = q && portionOfFood(f, q);
+    items.push(hit ? { name: f.name, portion: q, kcal: hit.kcal, protein: hit.protein } : { name: f.name, portion: def[0], kcal: def[1], protein: def[2] });
+  });
+  // 没认出的部分
+  let rest = '';
+  for (let i = 0; i < t.length; i++) rest += taken[i] ? '，' : t[i];
+  const unknown = rest.split(/[，,。；;、和跟与及还有再加另外然后]+/)
+    .map((s) => s.replace(QTY_RE, '').replace(/早上|早晨|早饭|早餐|早点|上午|下午|中午|午饭|午餐|中饭|晚上|晚饭|晚餐|加餐|今天|我|吃了|喝了|吃|喝|了|的|一些|一点|大概|左右|还|有|就|是|和|跟|又|也|点/g, '').replace(/[\d半一二两俩三四五六七八九十几大小个碗盘杯块根片只份]+$/g, ''))
+    .filter((s) => s.length >= 2);
+  return { slot, items, unknown };
+}
+let recognition = null;
+function startVoice() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const box = $('#sayText');
+  const keyboardTip = () => {
+    box.focus();
+    openModal(`<h3>🎤 用输入法说话</h3>
+      <div class="note">这个浏览器不支持网页直接录音，但可以用手机输入法的语音功能：
+        <ol><li>点一下上面的文字框，弹出键盘</li><li>点键盘上的 <b>🎤 话筒</b> 图标（华为/小艺输入法在键盘左下角或上方工具栏，也可以长按空格键）</li>
+        <li>说“中午吃了一碗米饭、半盘西兰花、二两鸡胸肉”</li><li>说完点 <b>“认出食物”</b></li></ol></div>
+      <button class="btn block" data-close style="margin-top:12px">知道了</button>`);
+  };
+  if (!SR) { keyboardTip(); return; }
+  if (recognition) { recognition.stop(); return; }
+  recognition = new SR();
+  recognition.lang = 'zh-CN';
+  recognition.interimResults = true;
+  recognition.continuous = false;
+  const btn = $('#voiceBtn');
+  const base = box.value ? box.value + '，' : '';
+  let gotText = false;
+  btn.textContent = '⏹ 正在听…点我结束';
+  recognition.onresult = (e) => {
+    let s = '';
+    for (let i = 0; i < e.results.length; i++) s += e.results[i][0].transcript;
+    if (s) gotText = true;
+    box.value = base + s;
+  };
+  recognition.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('没有麦克风权限，请在浏览器设置里允许');
+    else if (!gotText) keyboardTip();
+  };
+  recognition.onend = () => {
+    recognition = null;
+    const b = $('#voiceBtn'); if (b) b.textContent = '🎤 按我说话';
+    if (gotText) ACTIONS.sayParse();
+  };
+  try { recognition.start(); } catch (e) { recognition = null; keyboardTip(); }
 }
 
 /* ---------- 记录页 ---------- */
@@ -672,7 +792,7 @@ function renderPlan() {
       <h2>🗑️ 清空数据</h2>
       <p class="muted small" style="margin-top:-4px">会删除所有饮食、运动、体重记录，无法撤销。建议先导出备份。</p>
       <button class="btn danger block" data-action="clearData">清空所有数据</button>
-      <p class="muted small" style="text-align:center;margin:12px 0 0">轻盈计划 v1.0 · 热量数据为估算值，仅供参考</p>
+      <p class="muted small" style="text-align:center;margin:12px 0 0">轻盈计划 v1.1 · 热量数据为估算值，仅供参考</p>
     </div>`;
   }
   $('#page-plan').innerHTML = `
@@ -769,6 +889,24 @@ const ACTIONS = {
     renderBasket(); renderFab();
   },
   basketDel(el) { logState.basket.splice(+el.dataset.idx, 1); renderBasket(); renderFab(); },
+  voice() { startVoice(); },
+  sayParse() {
+    const box = $('#sayText');
+    const text = box.value.trim();
+    if (!text) { toast('先说一句或写一句吃了什么'); box.focus(); return; }
+    const r = parseSpeech(text);
+    if (r.slot && r.slot !== logState.slot) {
+      logState.slot = r.slot;
+      document.querySelectorAll('.seg [data-action="logSlot"]').forEach((b) => b.classList.toggle('on', b.dataset.slot === r.slot));
+      const h = $('#loggedArea'); if (h) { renderLogged(); h.previousElementSibling.textContent = `📒 ${dayLabel(logState.date)}${slotName(r.slot)}已记录`; }
+    }
+    r.items.forEach((it) => logState.basket.push(it));
+    $('#sayResult').innerHTML = `<div class="note" style="margin-top:8px">
+      ${r.items.length ? `✅ 认出 ${r.items.length} 样，已放进“待记入”${r.slot ? `（${slotName(r.slot)}）` : ''}：<br>${r.items.map((it) => `${esc(it.name)} ${esc(it.portion)}`).join('、')}<br>请核对，不对的点 ✕ 删掉。` : '😅 没认出食物。'}
+      ${r.unknown.length ? `<br>❓ 没认出：${r.unknown.map(esc).join('、')}，可以用下方“手动输入”补上。` : ''}</div>`;
+    if (r.items.length) box.value = '';
+    renderBasket(); renderFab();
+  },
   mPortion(el) { $('#mPortion').value = el.dataset.p; },
   manualAdd() {
     const name = $('#mName').value.trim();
