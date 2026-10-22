@@ -325,12 +325,14 @@ function renderLog() {
       </div>
     </div>
     <div class="card">
-      <h3>🎤 说一句话记餐</h3>
+      <h3>🎤 说一句 · 📷 拍一张</h3>
       <textarea class="input" id="sayText" style="min-height:64px;font-size:15px" placeholder="例如：中午吃了米饭100克、西兰花200克、二两鸡胸肉，还有两个鸡蛋"></textarea>
       <div class="row" style="margin-top:8px">
         <button class="btn ghost grow" id="voiceBtn" data-action="voice">🎤 按我说话</button>
         <button class="btn grow" data-action="sayParse">🔍 认出食物</button>
       </div>
+      <button class="btn ghost block" style="margin-top:8px" data-action="photo">📷 拍照识别食物</button>
+      <input type="file" id="photoInput" accept="image/*" capture="environment" hidden>
       <div id="sayResult"></div>
     </div>
     <div id="basketArea"></div>
@@ -591,11 +593,12 @@ function startVoice() {
   const box = $('#sayText');
   const keyboardTip = () => {
     box.focus();
-    openModal(`<h3>🎤 用输入法说话</h3>
-      <div class="note">这个浏览器不支持网页直接录音，但可以用手机输入法的语音功能：
+    openModal(`<h3>🎤 这个浏览器听不到声音</h3>
+      <div class="note">可以先用手机输入法的语音功能：
         <ol><li>点一下上面的文字框，弹出键盘</li><li>点键盘上的 <b>🎤 话筒</b> 图标（华为/小艺输入法在键盘左下角或上方工具栏，也可以长按空格键）</li>
         <li>说“中午吃了米饭100克、西兰花200克、二两鸡胸肉”</li><li>说完点 <b>“认出食物”</b></li></ol></div>
-      <button class="btn block" data-close style="margin-top:12px">知道了</button>`);
+      <p class="muted small" style="margin:10px 0 0">想直接点“按我说话”就能录音识别？在“计划 → 设置 → AI 识别”里填好智谱 API Key 即可。</p>
+      <div class="row" style="margin-top:12px"><button class="btn line grow" data-action="goAiSettings">开通 AI 语音</button><button class="btn grow" data-close>知道了</button></div>`);
   };
   if (!SR) { keyboardTip(); return; }
   if (recognition) { recognition.stop(); return; }
@@ -613,14 +616,12 @@ function startVoice() {
     if (s) gotText = true;
     box.value = base + s;
   };
-  recognition.onerror = (e) => {
-    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast('没有麦克风权限，请在浏览器设置里允许');
-    else if (!gotText) keyboardTip();
-  };
   recognition.onend = () => {
     recognition = null;
     const b = $('#voiceBtn'); if (b) b.textContent = '🎤 按我说话';
+    // 华为等浏览器常常“看似支持”网页录音却拿不到结果：没听到内容就引导开通 AI 语音或用输入法话筒
     if (gotText) ACTIONS.sayParse();
+    else keyboardTip();
   };
   try { recognition.start(); } catch (e) { recognition = null; keyboardTip(); }
 }
@@ -801,6 +802,7 @@ function renderPlan() {
         <label class="field">显示模式<select class="input" data-setting="theme">${opt('auto', s.theme, '跟随系统（自动深色/浅色）')}${opt('light', s.theme, '浅色')}${opt('dark', s.theme, '深色')}</select></label>
       </div>
     </div>
+    ${aiSettingsCard()}
     <div class="card">
       <h2>💾 备份与恢复</h2>
       <p class="muted small" style="margin-top:-4px">数据只保存在这部手机的浏览器里。换手机或清理浏览器前，请先导出备份码，发到微信“文件传输助手”保存。</p>
@@ -820,7 +822,7 @@ function renderPlan() {
       <h2>🗑️ 清空数据</h2>
       <p class="muted small" style="margin-top:-4px">会删除所有饮食、运动、体重记录，无法撤销。建议先导出备份。</p>
       <button class="btn danger block" data-action="clearData">清空所有数据</button>
-      <p class="muted small" style="text-align:center;margin:12px 0 0">轻盈计划 v1.2 · 热量数据为估算值，仅供参考</p>
+      <p class="muted small" style="text-align:center;margin:12px 0 0">轻盈计划 v1.3 · 热量数据为估算值，仅供参考</p>
     </div>`;
   }
   $('#page-plan').innerHTML = `
@@ -924,7 +926,7 @@ const ACTIONS = {
     $('#gInput').value = '';
   },
   basketDel(el) { logState.basket.splice(+el.dataset.idx, 1); renderBasket(); renderFab(); },
-  voice() { startVoice(); },
+  voice() { aiKey() ? startRecording() : startVoice(); },
   sayParse() {
     const box = $('#sayText');
     const text = box.value.trim();
@@ -1013,6 +1015,7 @@ const ACTIONS = {
   },
   installApp() { promptInstall(); }
 };
+Object.assign(ACTIONS, ACTIONS_EXTRA);
 
 document.addEventListener('click', (e) => {
   if (e.target.closest('[data-close]')) { closeModal(); return; }
@@ -1027,6 +1030,12 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('input', (e) => {
   const el = e.target;
+  if (el.dataset.photoGrams != null) {
+    const i = +el.dataset.photoGrams, it = photoItems[i];
+    const lab = $('#photoKcal' + i);
+    if (it && lab) lab.textContent = `${Math.round((it.k * (+el.value || 0)) / 100)}千卡`;
+    return;
+  }
   if (el.dataset.input === 'gramsPreview') {
     const f = FOODS[el.dataset.cat][+el.dataset.i];
     const g = readGramsInput();
@@ -1042,6 +1051,12 @@ document.addEventListener('input', (e) => {
 
 document.addEventListener('change', (e) => {
   const el = e.target;
+  if (el.id === 'photoInput') {
+    const file = el.files && el.files[0];
+    el.value = '';
+    handlePhoto(file);
+    return;
+  }
   if (el.dataset.input === 'logDate' && el.value) {
     logState.date = el.value > dateKey() ? dateKey() : el.value; renderLog(); renderFab();
   } else if (el.dataset.input === 'histDate' && el.value) {

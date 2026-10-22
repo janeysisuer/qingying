@@ -1,10 +1,11 @@
 /* 轻盈计划 Service Worker：离线缓存应用文件 */
-const CACHE = 'qingying-v3';
+const CACHE = 'qingying-v4';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './data.js',
+  './ai.js',
   './app.js',
   './manifest.json',
   './icons/icon-192.png',

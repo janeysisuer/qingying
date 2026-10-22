@@ -22,6 +22,7 @@
 | `styles.css` | 样式（浅色/深色自动切换） |
 | `data.js` | 食物库、运动计划、减脂餐计划 |
 | `app.js` | 应用逻辑 |
+| `ai.js` | 拍照识别食物、语音转文字（智谱开放平台，需在设置里填 API Key） |
 | `manifest.json` | PWA 安装信息 |
 | `sw.js` | Service Worker（离线可用） |
 | `icons/` | 应用图标（192/512，含 maskable） |
